@@ -67,9 +67,9 @@
         <button id="start-btn">深淵へ挑む</button>
         <div id="instruction" style="margin-top:20px; color:#bdc3c7; text-align:center; font-size: 0.85em; line-height: 1.6;">
             W,A,S,D: 移動 | Shift: ダッシュ | Space: ジャンプ<br>
-            左クリック: <span style="color: #ff4444;">重撃</span> (CT 1秒 / 弾丸消去範囲拡大)<br>
+            左クリック: <span style="color: #ff4444;">重撃</span> (CT 1秒 / 弾丸消去判定：狭い)<br>
             右クリック: <span style="color: #00ffff; font-weight: bold;">【縦断】</span> (10秒チャージ / ボスへの唯一の打撃)<br>
-            <span style="color: #f1c40f;">※黄色い弾：ミニオンが放つ追尾弾。斬らない限り消えません。</span>
+            <span style="color: #f1c40f;">※黄色い弾：高速追尾。正確に捉えなければ斬れません。</span>
         </div>
     </div>
 
@@ -342,12 +342,6 @@
             document.getElementById('desc').innerText = "観測者の心臓を貫き、世界は再構築された。";
         }
 
-        /**
-         * 弾丸作成
-         * type 0: 通常弾 (赤)
-         * type 1: 狙撃弾 (青)
-         * type 2: 追尾弾 (黄) - 斬らないと消えない
-         */
         function createBullet(type, pos, dir, speed) {
             let color = 0xff3333;
             if (type === 1) color = 0x00ffff;
@@ -370,7 +364,7 @@
                 type, 
                 velocity: dir.multiplyScalar(speed),
                 speed: speed,
-                life: 15.0 // 追尾弾の制限時間
+                life: 15.0 
             };
             scene.add(b);
             enemyBullets.push(b);
@@ -443,19 +437,20 @@
 
         function checkHit() {
             const tip = new THREE.Vector3(0, 0, -5.5).applyMatrix4(swordGroup.matrixWorld);
-            // 全ての弾丸（通常弾＋追尾弾）を斬れるように判定
+            // 通常攻撃の判定範囲を 18.0 から 9.0 に縮小
+            const SLASH_HIT_RADIUS = 9.0;
+            const MINION_HIT_RADIUS = 10.0;
+
             for (let i = enemyBullets.length - 1; i >= 0; i--) {
                 const b = enemyBullets[i];
-                // 斬撃範囲に入ったら消去 (タイプ問わず)
-                if (tip.distanceTo(b.position) < 18.0) {
+                if (tip.distanceTo(b.position) < SLASH_HIT_RADIUS) {
                     createExplosion(b.position, b.userData.type === 2 ? 0xffff00 : 0xffffff, 10);
                     scene.remove(b); enemyBullets.splice(i, 1); score += 100;
                 }
             }
-            // モブ破壊
             for (let i = minions.length - 1; i >= 0; i--) {
                 const m = minions[i];
-                if (tip.distanceTo(m.position) < 13.0) {
+                if (tip.distanceTo(m.position) < MINION_HIT_RADIUS) {
                     createExplosion(m.position, 0x00ffff, 15);
                     scene.remove(m); minions.splice(i, 1); score += 500;
                     audio.playSFX('hit');
@@ -469,7 +464,6 @@
             const delta = Math.min((time - prevTime) / 1000, 0.1);
 
             if (isGameStarted && !isGameOver) {
-                // Skill UI
                 if (skillTimer < SKILL_COOLDOWN) skillTimer += delta;
                 else if (!skillPlayed) { audio.playSFX('charge'); skillPlayed = true; }
                 document.getElementById('skill-fill').style.width = (Math.min(1, skillTimer/SKILL_COOLDOWN) * 100) + "%";
@@ -477,7 +471,6 @@
                 if (skillTimer >= SKILL_COOLDOWN) document.getElementById('skill-ready-msg').classList.add('ready-anim');
                 else document.getElementById('skill-ready-msg').classList.remove('ready-anim');
 
-                // Shake & Movement
                 if (shakeIntensity > 0) camera.position.addScaledVector(new THREE.Vector3(Math.random()-0.5, Math.random()-0.5, 0), shakeIntensity);
                 velocity.y -= GRAVITY * delta;
                 camera.position.y += velocity.y * delta;
@@ -492,7 +485,6 @@
                     camera.position.addScaledVector(forward.normalize(), -input.z * speed).addScaledVector(right.normalize(), input.x * speed);
                 }
 
-                // Sword
                 if (isAttacking) {
                     actionTime += delta;
                     const t = actionTime / 0.25;
@@ -505,7 +497,6 @@
 
                 bossAI(delta, time);
 
-                // Minions Logic (Summoner AI)
                 for(let i=minions.length-1; i>=0; i--) {
                     const m = minions[i];
                     const target = camera.position.clone(); target.y -= 0.5;
@@ -517,8 +508,8 @@
                     m.userData.shotTimer += delta;
                     if (m.userData.shotTimer >= 2.5) {
                         m.userData.shotTimer = 0;
-                        // 追尾弾(Type 2)を発射
-                        createBullet(2, m.position, dirToPlayer.clone(), 15); 
+                        // 黄色い追尾弾の速度を 15 から 28 に変更
+                        createBullet(2, m.position, dirToPlayer.clone(), 28); 
                     }
 
                     if (m.position.distanceTo(camera.position) < 5.5) {
@@ -530,13 +521,11 @@
                     }
                 }
 
-                // Slashes (Impact wave)
                 for (let i = playerSlashes.length - 1; i >= 0; i--) {
                     const s = playerSlashes[i];
                     s.position.addScaledVector(s.userData.velocity, delta);
                     s.userData.life -= delta;
                     
-                    // 衝撃波でも弾丸を消せるように強化
                     for (let j = enemyBullets.length - 1; j >= 0; j--) {
                         if (s.position.distanceTo(enemyBullets[j].position) < 25) {
                             scene.remove(enemyBullets[j]); enemyBullets.splice(j, 1); score += 50;
@@ -548,30 +537,26 @@
                     } else if (s.userData.life <= 0) { scene.remove(s); playerSlashes.splice(i, 1); }
                 }
 
-                // Bullets Logic (Stronger AI with Homing)
                 for (let i = enemyBullets.length - 1; i >= 0; i--) {
                     const b = enemyBullets[i];
                     
-                    // 追尾弾(Type 2)のAI
                     if (b.userData.type === 2) {
                         const target = camera.position.clone();
                         target.y -= 0.5;
                         const idealDir = new THREE.Vector3().subVectors(target, b.position).normalize();
-                        
-                        // 現在の速度ベクトルをプレイヤーの方へ少しずつ向ける (ラープ)
                         const currentDir = b.userData.velocity.clone().normalize();
-                        currentDir.lerp(idealDir, 0.05); // 旋回性能
+                        // 追尾旋回性能を若干向上 (0.05 -> 0.06)
+                        currentDir.lerp(idealDir, 0.06); 
                         b.userData.velocity.copy(currentDir.multiplyScalar(b.userData.speed));
                         
                         b.userData.life -= delta;
-                        if (b.userData.life <= 0) { // 一定時間で自壊
+                        if (b.userData.life <= 0) { 
                             scene.remove(b); enemyBullets.splice(i, 1); continue;
                         }
                     }
 
                     b.position.addScaledVector(b.userData.velocity, delta);
 
-                    // 追尾弾は地面(y <= -1)に当たっても消えないようにスキップ
                     if (b.userData.type !== 2 && (b.position.y <= -1 || b.position.length() > 800)) {
                         scene.remove(b); enemyBullets.splice(i, 1);
                     } else if (b.position.distanceTo(camera.position) < HITBOX_RADIUS) {
@@ -583,7 +568,6 @@
                     }
                 }
 
-                // Particles
                 for(let i=particles.length-1; i>=0; i--) {
                     const p = particles[i];
                     p.position.add(p.userData.velocity);
