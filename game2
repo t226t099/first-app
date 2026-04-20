@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sword Master - Ultimate Hell</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', 'Meiryo', sans-serif; }
+        #overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.8); display: flex; flex-direction: column;
+            justify-content: center; align-items: center; color: white; z-index: 100;
+        }
+        #hud {
+            position: absolute; top: 20px; left: 20px; color: white;
+            font-size: 18px; pointer-events: none; text-shadow: 2px 2px 4px black;
+            background: rgba(0,0,0,0.3); padding: 15px; border-radius: 8px;
+            display: none;
+        }
+        #crosshair {
+            position: absolute; top: 50%; left: 50%; width: 16px; height: 16px;
+            pointer-events: none; transform: translate(-50%, -50%);
+            border: 2px solid rgba(0, 255, 255, 0.8); border-radius: 50%;
+            display: none;
+        }
+        #boss-ui {
+            position: absolute; top: 20px; right: 20px; width: 300px;
+            background: rgba(0,0,0,0.5); padding: 10px; border-radius: 5px;
+            color: white; text-align: center; display: none;
+        }
+        #boss-hp-bar {
+            width: 100%; height: 25px; background: #333; margin-top: 5px;
+            border-radius: 3px; overflow: hidden; display: flex; gap: 5px; padding: 3px; box-sizing: border-box;
+        }
+        .boss-hp-cell { flex: 1; background: #e74c3c; transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        .boss-hp-cell.lost { opacity: 0.1; transform: scale(0.8) translateY(10px); }
+
+        #skill-ui {
+            position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%);
+            width: 280px; text-align: center; color: white; display: none;
+        }
+        #skill-bar { width: 100%; height: 14px; background: rgba(255,255,255,0.1); border-radius: 7px; overflow: hidden; margin-top: 5px; border: 1px solid #00ffff; }
+        #skill-fill { width: 0%; height: 100%; background: linear-gradient(90deg, #0088ff, #00ffff); box-shadow: 0 0 15px #00ffff; }
+        #skill-ready-msg { color: #00ffff; font-weight: bold; font-size: 16px; height: 20px; text-shadow: 0 0 10px #00ffff; }
+        .ready-anim { animation: blink 0.3s infinite; }
+
+        @keyframes blink { 0%, 100% { opacity: 1; transform: scale(1.1); } 50% { opacity: 0.6; transform: scale(1); } }
+        
+        #flash { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: white; pointer-events: none; opacity: 0; z-index: 200; }
+        #blood { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: radial-gradient(circle, transparent 20%, rgba(255, 0, 0, 0.7) 100%); pointer-events: none; opacity: 0; transition: opacity 0.1s; }
+        
+        button { padding: 15px 50px; font-size: 24px; cursor: pointer; background: #c0392b; color: white; border: none; border-radius: 5px; box-shadow: 0 4px 0 #8e271b; }
+        button:hover { background: #e74c3c; }
+        #warning { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #ff0000; font-size: 48px; font-weight: bold; text-shadow: 0 0 20px #ff0000; display: none; pointer-events: none; }
+    </style>
+</head>
+<body>
+
+    <div id="flash"></div>
+    <div id="blood"></div>
+    <div id="warning">WARNING: OVERDRIVE</div>
+
+    <div id="overlay">
+        <h1 id="title" style="letter-spacing: 10px; color: #e74c3c;">最終決戦：無限の絶望</h1>
+        <p id="desc">地獄の弾幕を切り裂き、神の眼を閉じさせろ</p>
+        <button id="start-btn">深淵へ挑む</button>
+        <div id="instruction" style="margin-top:20px; color:#bdc3c7; text-align:center; font-size: 0.85em; line-height: 1.6;">
+            W,A,S,D: 移動 | Shift: ダッシュ | Space: ジャンプ<br>
+            左クリック: <span style="color: #ff4444;">重撃</span> (CT 1秒 / 弾丸消去範囲拡大)<br>
+            右クリック: <span style="color: #00ffff; font-weight: bold;">【縦断】</span> (10秒チャージ / ボスへの唯一の打撃)<br>
+            <span style="color: #f1c40f;">※黄色い弾：ミニオンが放つ追尾弾。斬らない限り消えません。</span>
+        </div>
+    </div>
+
+    <div id="crosshair"></div>
+    
+    <div id="hud">
+        HP: <span id="hp">100</span><br>
+        SCORE: <span id="score">0</span>
+    </div>
+
+    <div id="boss-ui">
+        BOSS: 真・響鳴の観測者
+        <div id="boss-hp-bar">
+            <div class="boss-hp-cell" id="hp-3"></div>
+            <div class="boss-hp-cell" id="hp-2"></div>
+            <div class="boss-hp-cell" id="hp-1"></div>
+        </div>
+    </div>
+
+    <div id="skill-ui">
+        <div id="skill-ready-msg"></div>
+        <div id="skill-bar"><div id="skill-fill"></div></div>
+    </div>
+
+    <script>
+        class AudioManager {
+            constructor() {
+                this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+                this.masterGain = this.ctx.createGain();
+                this.masterGain.connect(this.ctx.destination);
+                this.masterGain.gain.value = 0.5;
+                this.isStarted = false;
+            }
+
+            async playBGM() {
+                if (this.isStarted) return;
+                this.isStarted = true;
+                const playNote = (freq, startTime, duration) => {
+                    const osc = this.ctx.createOscillator();
+                    const g = this.ctx.createGain();
+                    osc.type = 'sawtooth';
+                    osc.frequency.setValueAtTime(freq, startTime);
+                    g.gain.setValueAtTime(0.04, startTime);
+                    g.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+                    osc.connect(g);
+                    g.connect(this.masterGain);
+                    osc.start(startTime);
+                    osc.stop(startTime + duration);
+                };
+                setInterval(() => {
+                    const now = this.ctx.currentTime;
+                    [55, 41, 49, 36].forEach((f, i) => playNote(f, now + i * 0.5, 2.0));
+                }, 2000);
+            }
+
+            playSFX(type) {
+                const osc = this.ctx.createOscillator();
+                const g = this.ctx.createGain();
+                const now = this.ctx.currentTime;
+                switch(type) {
+                    case 'slash': osc.type = 'sawtooth'; osc.frequency.setValueAtTime(1200, now); osc.frequency.exponentialRampToValueAtTime(100, now + 0.2); g.gain.setValueAtTime(0.2, now); g.gain.linearRampToValueAtTime(0, now + 0.2); break;
+                    case 'hit': osc.type = 'sine'; osc.frequency.setValueAtTime(80, now); g.gain.setValueAtTime(0.6, now); g.gain.linearRampToValueAtTime(0, now + 0.15); break;
+                    case 'charge': osc.type = 'square'; osc.frequency.setValueAtTime(200, now); osc.frequency.exponentialRampToValueAtTime(1000, now + 0.4); g.gain.setValueAtTime(0.1, now); g.gain.linearRampToValueAtTime(0, now + 0.4); break;
+                    case 'explode': osc.type = 'sawtooth'; osc.frequency.setValueAtTime(150, now); osc.frequency.linearRampToValueAtTime(40, now + 1); g.gain.setValueAtTime(0.8, now); g.gain.exponentialRampToValueAtTime(0.001, now + 1); break;
+                }
+                osc.connect(g); g.connect(this.masterGain); osc.start(); osc.stop(now + 1.5);
+            }
+        }
+
+        const audio = new AudioManager();
+        let camera, scene, renderer, swordGroup;
+        let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false, isSprinting = false, canJump = true;
+        let velocity = new THREE.Vector3();
+        let prevTime = performance.now();
+        
+        let boss = null;
+        let enemyBullets = []; 
+        let playerSlashes = [];
+        let minions = [];
+        let particles = [];
+        let hp = 100, score = 0, isGameOver = false, isGameStarted = false, shakeIntensity = 0;
+
+        const ATTACK_COOLDOWN = 1.0;
+        let attackTimer = 0, isAttacking = false, actionTime = 0;
+        const SKILL_COOLDOWN = 10.0;
+        let skillTimer = 0, skillPlayed = false;
+
+        const PLAYER_HEIGHT = 1.8;
+        const GRAVITY = 35.0;
+        const HITBOX_RADIUS = 2.2;
+
+        let bossSpecialTimer = 0;
+        let minionSpawnTimer = 0;
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x020005);
+            scene.fog = new THREE.Fog(0x020005, 5, 300);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, PLAYER_HEIGHT, 80);
+            camera.rotation.order = 'YXZ';
+
+            const sun = new THREE.PointLight(0xff0044, 3, 400);
+            sun.position.set(0, 60, 0);
+            scene.add(sun, new THREE.AmbientLight(0xffffff, 0.1));
+
+            const grid = new THREE.GridHelper(1000, 100, 0xff0044, 0x220011);
+            scene.add(grid);
+
+            createSword();
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.body.appendChild(renderer.domElement);
+
+            setupControls();
+            spawnBoss();
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function createSword() {
+            swordGroup = new THREE.Group();
+            const blade = new THREE.Mesh(
+                new THREE.BoxGeometry(0.05, 0.25, 3.5),
+                new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x00ffff, emissiveIntensity: 8 })
+            );
+            blade.position.set(0, 0, -1.7);
+            swordGroup.add(blade);
+            const pivot = new THREE.Group();
+            pivot.add(swordGroup);
+            swordGroup.position.set(1.1, -1.1, -1.3);
+            camera.add(pivot);
+            scene.add(camera);
+        }
+
+        function spawnBoss() {
+            boss = new THREE.Group();
+            const core = new THREE.Mesh(new THREE.IcosahedronGeometry(12, 1), new THREE.MeshStandardMaterial({ color: 0xff0044, emissive: 0xff0000, emissiveIntensity: 2 }));
+            boss.add(core);
+            boss.position.set(0, 18, -140);
+            boss.userData = { hp: 3, shotTimer: 0, angle: 0, pattern: 0, patternTimer: 0, dead: false };
+            scene.add(boss);
+        }
+
+        function createMinion() {
+            const minion = new THREE.Mesh(new THREE.BoxGeometry(2.5, 2.5, 2.5), new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x0088ff }));
+            const angle = Math.random() * Math.PI * 2;
+            const dist = 120 + Math.random() * 60;
+            minion.position.set(Math.cos(angle) * dist, 5, Math.sin(angle) * dist);
+            minion.userData = { hp: 1, shotTimer: 0 };
+            scene.add(minion);
+            minions.push(minion);
+        }
+
+        function createExplosion(pos, color, count = 30) {
+            for(let i=0; i<count; i++) {
+                const p = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), new THREE.MeshBasicMaterial({ color: color }));
+                p.position.copy(pos);
+                p.userData = { 
+                    velocity: new THREE.Vector3(Math.random()-0.5, Math.random()-0.5, Math.random()-0.5).multiplyScalar(2),
+                    life: 2.0 
+                };
+                scene.add(p);
+                particles.push(p);
+            }
+        }
+
+        function setupControls() {
+            document.getElementById('start-btn').addEventListener('click', () => {
+                if (isGameOver) location.reload();
+                else {
+                    document.body.requestPointerLock();
+                    audio.ctx.resume();
+                    audio.playBGM();
+                }
+            });
+            document.addEventListener('pointerlockchange', () => {
+                const isLocked = document.pointerLockElement === document.body;
+                document.getElementById('overlay').style.display = isLocked ? 'none' : 'flex';
+                ['hud', 'boss-ui', 'skill-ui', 'crosshair'].forEach(id => document.getElementById(id).style.display = isLocked ? 'block' : 'none');
+                isGameStarted = isLocked;
+            });
+            const onKey = (v) => (e) => {
+                if (e.code === 'KeyW') moveForward = v; if (e.code === 'KeyA') moveLeft = v;
+                if (e.code === 'KeyS') moveBackward = v; if (e.code === 'KeyD') moveRight = v;
+                if (e.code === 'ShiftLeft') isSprinting = v;
+                if (e.code === 'Space' && v && canJump) { velocity.y += 18; canJump = false; }
+            };
+            document.addEventListener('keydown', onKey(true));
+            document.addEventListener('keyup', onKey(false));
+            document.addEventListener('mousedown', (e) => {
+                if (!isGameStarted || isGameOver) return;
+                if (e.button === 0 && attackTimer <= 0) {
+                    isAttacking = true; actionTime = 0; attackTimer = ATTACK_COOLDOWN;
+                    audio.playSFX('slash');
+                } else if (e.button === 2 && skillTimer >= SKILL_COOLDOWN) {
+                    fireVerticalSlash();
+                }
+            });
+            document.addEventListener('mousemove', (e) => {
+                if (document.pointerLockElement === document.body && !isGameOver) {
+                    camera.rotation.y -= e.movementX * 0.002;
+                    camera.rotation.x -= e.movementY * 0.002;
+                    camera.rotation.x = Math.max(-Math.PI / 2.1, Math.min(Math.PI / 2.1, camera.rotation.x));
+                }
+            });
+        }
+
+        function fireVerticalSlash() {
+            skillTimer = 0; skillPlayed = false;
+            isAttacking = true; actionTime = 0; 
+            audio.playSFX('slash');
+            const s = new THREE.Group();
+            s.add(new THREE.Mesh(new THREE.PlaneGeometry(1.2, 25), new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide })));
+            s.add(new THREE.Mesh(new THREE.PlaneGeometry(8.0, 30), new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.6, side: THREE.DoubleSide })));
+            s.position.copy(camera.position);
+            s.quaternion.copy(camera.quaternion);
+            const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+            s.userData = { velocity: dir.multiplyScalar(100), life: 3.5 };
+            scene.add(s);
+            playerSlashes.push(s);
+            document.getElementById('flash').style.opacity = 0.7;
+            setTimeout(() => document.getElementById('flash').style.opacity = 0, 150);
+            shakeIntensity = 1.5;
+            setTimeout(() => shakeIntensity = 0, 300);
+        }
+
+        function bossHit() {
+            if (boss.userData.hp <= 0 || boss.userData.dead) return;
+            document.getElementById(`hp-${boss.userData.hp}`).classList.add('lost');
+            boss.userData.hp--;
+            audio.playSFX('hit');
+            shakeIntensity = 3.0;
+            setTimeout(() => shakeIntensity = 0, 800);
+            if (boss.userData.hp <= 0) {
+                boss.userData.dead = true;
+                bossExplodeSequence();
+            }
+        }
+
+        function bossExplodeSequence() {
+            audio.playSFX('explode');
+            createExplosion(boss.position, 0xff0044, 200);
+            createExplosion(boss.position, 0xffffff, 100);
+            
+            const light = new THREE.PointLight(0xffffff, 0, 500);
+            light.position.copy(boss.position);
+            scene.add(light);
+            
+            let count = 0;
+            const interval = setInterval(() => {
+                count++;
+                light.intensity += 10;
+                createExplosion(boss.position, count % 2 === 0 ? 0xffffff : 0x00ffff, 20);
+                if (count > 20) {
+                    clearInterval(interval);
+                    scene.remove(boss);
+                    scene.remove(light);
+                    winGame();
+                }
+            }, 50);
+        }
+
+        function winGame() {
+            isGameOver = true; document.exitPointerLock();
+            document.getElementById('overlay').style.display = 'flex';
+            document.getElementById('title').innerText = "GOD SLAYER";
+            document.getElementById('title').style.color = "#00ffff";
+            document.getElementById('desc').innerText = "観測者の心臓を貫き、世界は再構築された。";
+        }
+
+        /**
+         * 弾丸作成
+         * type 0: 通常弾 (赤)
+         * type 1: 狙撃弾 (青)
+         * type 2: 追尾弾 (黄) - 斬らないと消えない
+         */
+        function createBullet(type, pos, dir, speed) {
+            let color = 0xff3333;
+            if (type === 1) color = 0x00ffff;
+            if (type === 2) color = 0xffff00;
+
+            const b = new THREE.Mesh(
+                new THREE.SphereGeometry(type === 2 ? 1.5 : (type === 0 ? 1.1 : 0.8), 8, 8), 
+                new THREE.MeshBasicMaterial({ color: color })
+            );
+            b.position.copy(pos);
+            
+            if (type !== 2) {
+                const spread = type === 0 ? 0.2 : 0.05;
+                dir.x += (Math.random() - 0.5) * spread;
+                dir.y += (Math.random() - 0.5) * spread;
+                dir.normalize();
+            }
+
+            b.userData = { 
+                type, 
+                velocity: dir.multiplyScalar(speed),
+                speed: speed,
+                life: 15.0 // 追尾弾の制限時間
+            };
+            scene.add(b);
+            enemyBullets.push(b);
+        }
+
+        function bossAI(delta, time) {
+            if (!boss || isGameOver || boss.userData.dead) return;
+            boss.position.y = 15 + Math.sin(time * 0.0015) * 8;
+            boss.position.x = Math.sin(time * 0.0008) * 70;
+            
+            boss.userData.shotTimer += delta;
+            boss.userData.patternTimer += delta;
+            bossSpecialTimer += delta;
+            minionSpawnTimer += delta;
+
+            if (minionSpawnTimer > 5) {
+                createMinion();
+                minionSpawnTimer = 0;
+            }
+
+            if (bossSpecialTimer > 18) {
+                document.getElementById('warning').style.display = 'block';
+                setTimeout(() => document.getElementById('warning').style.display = 'none', 1500);
+                for(let i=0; i<72; i++) {
+                    const a = (i/72) * Math.PI * 2;
+                    const v = new THREE.Vector3(Math.cos(a), (Math.random()-0.5)*0.1, Math.sin(a));
+                    createBullet(1, boss.position, v, 55);
+                    createBullet(0, boss.position, v.clone().multiplyScalar(1.2), 35);
+                }
+                bossSpecialTimer = 0;
+            }
+
+            if (boss.userData.patternTimer > 5) {
+                boss.userData.pattern = (boss.userData.pattern + 1) % 4;
+                boss.userData.patternTimer = 0;
+            }
+
+            if (boss.userData.shotTimer > 0.01) {
+                boss.userData.shotTimer = 0;
+                const origin = boss.position.clone();
+                const targetPos = camera.position.clone();
+                targetPos.y -= 0.5;
+                const toPlayer = new THREE.Vector3().subVectors(targetPos, origin).normalize();
+                const a = boss.userData.angle;
+
+                switch(boss.userData.pattern) {
+                    case 0:
+                        createBullet(0, origin, new THREE.Vector3(Math.cos(a), Math.sin(a*0.2) - 0.1, Math.sin(a)), 32);
+                        boss.userData.angle += 0.25;
+                        break;
+                    case 1:
+                        if (Math.random() < 0.8) createBullet(1, origin, toPlayer, 75);
+                        break;
+                    case 2:
+                        if (Math.random() < 0.2) {
+                            for(let i=0; i<32; i++) {
+                                const angle = (i/32) * Math.PI * 2;
+                                createBullet(0, origin, new THREE.Vector3(Math.cos(angle), -0.1, Math.sin(angle)), 38);
+                            }
+                        }
+                        break;
+                    case 3:
+                        const rainPos = new THREE.Vector3(camera.position.x + (Math.random()-0.5)*180, 80, camera.position.z + (Math.random()-0.5)*180);
+                        const toGround = new THREE.Vector3(Math.random()-0.5, -1, Math.random()-0.5).normalize();
+                        createBullet(0, rainPos, toGround, 60);
+                        break;
+                }
+            }
+        }
+
+        function checkHit() {
+            const tip = new THREE.Vector3(0, 0, -5.5).applyMatrix4(swordGroup.matrixWorld);
+            // 全ての弾丸（通常弾＋追尾弾）を斬れるように判定
+            for (let i = enemyBullets.length - 1; i >= 0; i--) {
+                const b = enemyBullets[i];
+                // 斬撃範囲に入ったら消去 (タイプ問わず)
+                if (tip.distanceTo(b.position) < 18.0) {
+                    createExplosion(b.position, b.userData.type === 2 ? 0xffff00 : 0xffffff, 10);
+                    scene.remove(b); enemyBullets.splice(i, 1); score += 100;
+                }
+            }
+            // モブ破壊
+            for (let i = minions.length - 1; i >= 0; i--) {
+                const m = minions[i];
+                if (tip.distanceTo(m.position) < 13.0) {
+                    createExplosion(m.position, 0x00ffff, 15);
+                    scene.remove(m); minions.splice(i, 1); score += 500;
+                    audio.playSFX('hit');
+                }
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const time = performance.now();
+            const delta = Math.min((time - prevTime) / 1000, 0.1);
+
+            if (isGameStarted && !isGameOver) {
+                // Skill UI
+                if (skillTimer < SKILL_COOLDOWN) skillTimer += delta;
+                else if (!skillPlayed) { audio.playSFX('charge'); skillPlayed = true; }
+                document.getElementById('skill-fill').style.width = (Math.min(1, skillTimer/SKILL_COOLDOWN) * 100) + "%";
+                document.getElementById('skill-ready-msg').innerText = skillTimer >= SKILL_COOLDOWN ? "READY: RIGHT CLICK" : "CHARGING...";
+                if (skillTimer >= SKILL_COOLDOWN) document.getElementById('skill-ready-msg').classList.add('ready-anim');
+                else document.getElementById('skill-ready-msg').classList.remove('ready-anim');
+
+                // Shake & Movement
+                if (shakeIntensity > 0) camera.position.addScaledVector(new THREE.Vector3(Math.random()-0.5, Math.random()-0.5, 0), shakeIntensity);
+                velocity.y -= GRAVITY * delta;
+                camera.position.y += velocity.y * delta;
+                if (camera.position.y <= PLAYER_HEIGHT) { velocity.y = 0; camera.position.y = PLAYER_HEIGHT; canJump = true; }
+                const speed = (isSprinting ? 45 : 28) * delta;
+                const input = new THREE.Vector3();
+                if (moveForward) input.z -= 1; if (moveBackward) input.z += 1;
+                if (moveLeft) input.x -= 1; if (moveRight) input.x += 1;
+                if (input.length() > 0) {
+                    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion); forward.y = 0;
+                    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion); right.y = 0;
+                    camera.position.addScaledVector(forward.normalize(), -input.z * speed).addScaledVector(right.normalize(), input.x * speed);
+                }
+
+                // Sword
+                if (isAttacking) {
+                    actionTime += delta;
+                    const t = actionTime / 0.25;
+                    if (t < 0.5) swordGroup.rotation.x = THREE.MathUtils.lerp(0, -3.8, t/0.5);
+                    else if (t < 1.0) swordGroup.rotation.x = THREE.MathUtils.lerp(-3.8, 0, (t-0.5)/0.5);
+                    else isAttacking = false;
+                    checkHit();
+                }
+                if (attackTimer > 0) attackTimer -= delta;
+
+                bossAI(delta, time);
+
+                // Minions Logic (Summoner AI)
+                for(let i=minions.length-1; i>=0; i--) {
+                    const m = minions[i];
+                    const target = camera.position.clone(); target.y -= 0.5;
+                    const dirToPlayer = new THREE.Vector3().subVectors(target, m.position).normalize();
+                    
+                    m.position.addScaledVector(dirToPlayer, 18 * delta);
+                    m.rotation.y += delta * 6;
+
+                    m.userData.shotTimer += delta;
+                    if (m.userData.shotTimer >= 2.5) {
+                        m.userData.shotTimer = 0;
+                        // 追尾弾(Type 2)を発射
+                        createBullet(2, m.position, dirToPlayer.clone(), 15); 
+                    }
+
+                    if (m.position.distanceTo(camera.position) < 5.5) {
+                        hp -= 20; createExplosion(m.position, 0x00ffff, 20);
+                        scene.remove(m); minions.splice(i, 1);
+                        audio.playSFX('hit');
+                        document.getElementById('blood').style.opacity = 1;
+                        setTimeout(() => document.getElementById('blood').style.opacity = 0, 100);
+                    }
+                }
+
+                // Slashes (Impact wave)
+                for (let i = playerSlashes.length - 1; i >= 0; i--) {
+                    const s = playerSlashes[i];
+                    s.position.addScaledVector(s.userData.velocity, delta);
+                    s.userData.life -= delta;
+                    
+                    // 衝撃波でも弾丸を消せるように強化
+                    for (let j = enemyBullets.length - 1; j >= 0; j--) {
+                        if (s.position.distanceTo(enemyBullets[j].position) < 25) {
+                            scene.remove(enemyBullets[j]); enemyBullets.splice(j, 1); score += 50;
+                        }
+                    }
+
+                    if (!boss.userData.dead && s.position.distanceTo(boss.position) < 22.0) {
+                        bossHit(); scene.remove(s); playerSlashes.splice(i, 1);
+                    } else if (s.userData.life <= 0) { scene.remove(s); playerSlashes.splice(i, 1); }
+                }
+
+                // Bullets Logic (Stronger AI with Homing)
+                for (let i = enemyBullets.length - 1; i >= 0; i--) {
+                    const b = enemyBullets[i];
+                    
+                    // 追尾弾(Type 2)のAI
+                    if (b.userData.type === 2) {
+                        const target = camera.position.clone();
+                        target.y -= 0.5;
+                        const idealDir = new THREE.Vector3().subVectors(target, b.position).normalize();
+                        
+                        // 現在の速度ベクトルをプレイヤーの方へ少しずつ向ける (ラープ)
+                        const currentDir = b.userData.velocity.clone().normalize();
+                        currentDir.lerp(idealDir, 0.05); // 旋回性能
+                        b.userData.velocity.copy(currentDir.multiplyScalar(b.userData.speed));
+                        
+                        b.userData.life -= delta;
+                        if (b.userData.life <= 0) { // 一定時間で自壊
+                            scene.remove(b); enemyBullets.splice(i, 1); continue;
+                        }
+                    }
+
+                    b.position.addScaledVector(b.userData.velocity, delta);
+
+                    // 追尾弾は地面(y <= -1)に当たっても消えないようにスキップ
+                    if (b.userData.type !== 2 && (b.position.y <= -1 || b.position.length() > 800)) {
+                        scene.remove(b); enemyBullets.splice(i, 1);
+                    } else if (b.position.distanceTo(camera.position) < HITBOX_RADIUS) {
+                        hp -= (b.userData.type === 2 ? 25 : 15); 
+                        scene.remove(b); enemyBullets.splice(i, 1);
+                        audio.playSFX('hit');
+                        document.getElementById('blood').style.opacity = 1;
+                        setTimeout(() => document.getElementById('blood').style.opacity = 0, 100);
+                    }
+                }
+
+                // Particles
+                for(let i=particles.length-1; i>=0; i--) {
+                    const p = particles[i];
+                    p.position.add(p.userData.velocity);
+                    p.userData.life -= delta;
+                    p.scale.multiplyScalar(0.98);
+                    if(p.userData.life <= 0) { scene.remove(p); particles.splice(i, 1); }
+                }
+
+                document.getElementById('hp').innerText = Math.max(0, Math.floor(hp));
+                document.getElementById('score').innerText = score;
+                if (hp <= 0 && !isGameOver) { 
+                    isGameOver = true; document.exitPointerLock(); 
+                    document.getElementById('overlay').style.display = 'flex'; 
+                    document.getElementById('title').innerText = "ERASED"; 
+                }
+            }
+            prevTime = time;
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        init(); animate();
+    </script>
+</body>
+</html>
